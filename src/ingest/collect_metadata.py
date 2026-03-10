@@ -1,14 +1,12 @@
-"""
-Extract and normalize metadata from raw CourtListener JSON files.
+# Extract and normalize metadata from raw CourtListener JSON files.
 
-Usage:
-    python -m src.ingest.collect_metadata
-    python -m src.ingest.collect_metadata --input data/raw/opinions --output data/processed/metadata
+# TEST
+#     python -m src.ingest.collect_metadata
+#     python -m src.ingest.collect_metadata --input data/raw/opinions --output data/processed/metadata
 
-Reads cluster JSON files saved by fetch_courtlistener and produces:
-  - One metadata JSON per document  (metadata/<cluster_id>.json)
-  - A combined catalog file          (metadata/catalog.jsonl)
-"""
+# Reads cluster JSON files saved by fetch_courtlistener and produces:
+#   - One metadata JSON per document  (metadata/<cluster_id>.json)
+#   - A combined catalog file          (metadata/catalog.jsonl)
 
 import argparse
 import json
@@ -29,15 +27,13 @@ def strip_html(text: str) -> str:
     return _TAG_RE.sub("", text).strip()
 
 
-# ── Extraction ────────────────────────────────────────────────
+#Extraction
 
 
 def extract_metadata(record: dict) -> dict:
-    """
-    Pull structured metadata from a raw cluster+opinions record.
+    # Pull structured metadata from a raw cluster+opinions record.
 
-    Returns a flat dict suitable for indexing / filtering.
-    """
+    # Returns a flat dict suitable for indexing / filtering.
     cluster = record.get("cluster", {})
     opinions = record.get("opinions", [])
 
@@ -96,17 +92,14 @@ def extract_metadata(record: dict) -> dict:
     }
 
 
-# ── Pipeline ──────────────────────────────────────────────────
+#Pipeline 
 
 
 def process_all(
     input_dir: Path = OPINIONS_RAW_DIR,
     output_dir: Path = METADATA_DIR,
 ) -> list[dict]:
-    """
-    Read every cluster_*.json in *input_dir*, extract metadata,
-    and write individual + catalog files to *output_dir*.
-    """
+    # Read every cluster_*.json in *input_dir*, extract metadata, and write individual + catalog files to *output_dir*.
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_files = sorted(input_dir.glob("cluster_*.json"))
 
@@ -138,9 +131,6 @@ def process_all(
         len(catalog), output_dir, catalog_path,
     )
     return catalog
-
-
-# ── CLI ───────────────────────────────────────────────────────
 
 
 def main():
