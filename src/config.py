@@ -1,6 +1,10 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Project root 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -23,6 +27,7 @@ CL_API_TOKEN = os.environ.get("COURTLISTENER_TOKEN", "")
 # Default fetch settings
 CL_DEFAULT_PAGE_SIZE = 20
 CL_MAX_PAGES = 5  # safety cap per fetch run
+CL_MAX_RETRIES = 3
 CL_REQUEST_TIMEOUT = 30  # seconds
 
 # Ensure directories exist
