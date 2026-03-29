@@ -3,7 +3,7 @@
 
 # TEST
 #     python -m src.ingest.fetch_courtlistener --query "Fourth Amendment" --max-pages 3
-#     python -m src.ingest.fetch_courtlistener --court scotus --max-pages 2
+#     python -m src.ingest.fetch_courtlistener --query "Fourth Amendment" --court scotus --max-pages 2
 
 # Requires COURTLISTENER_TOKEN .env file
 
@@ -73,7 +73,7 @@ def search_opinions(
 ) -> list[dict]:
     # Search CourtListener for opinion clusters matching the query.
     # Returns a flat list of cluster result dicts across up to max_pages.
-    params: dict = {"q": query, "type": "o"}
+    params: dict = {"q": query, "type": "o", "page_size": CL_DEFAULT_PAGE_SIZE}
     if court:
         params["court"] = court
     if date_gte:
@@ -140,6 +140,8 @@ def fetch_and_save(
     # JSON responses to *out_dir*.
 
     # Returns list of saved file paths.
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     search_results = search_opinions(
         query, court=court, date_gte=date_gte, date_lte=date_lte,
         max_pages=max_pages,

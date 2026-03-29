@@ -27,7 +27,62 @@ def strip_html(text: str) -> str:
     return _TAG_RE.sub("", text).strip()
 
 
-#Extraction
+def _as_list(value: object) -> list:
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    return [value]
+
+
+def _get_nested(mapping: dict, *keys: str, default: str = "") -> str:
+    current = mapping
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    if current is None:
+        return default
+    return str(current)
+
+
+def _extract_court_id(cluster: dict, opinions: list[dict]) -> str:
+    docket = cluster.get("docket")
+    if isinstance(docket, dict):
+        value = docket.get("court_id") or docket.get("court")
+        if value is not None:
+            return str(value)
+
+    for candidate in (
+        _get_nested(cluster, "court", "id"),
+        _get_nested(cluster, "court_id"),
+        _get_nested(cluster, "court"),
+    ):
+        if candidate:
+            return candidate
+
+    for opinion in opinions:
+        for candidate in (
+            _get_nested(opinion, "court", "id"),
+            _get_nested(opinion, "court_id"),
+            _get_nested(opinion, "court"),
+        ):
+            if candidate:
+                return candidate
+
+    return ""
+
+
+def _extract_docket_number(cluster: dict) -> str:
+    docket = cluster.get("docket")
+    if isinstance(docket, dict):
+        value = docket.get("docket_number") or docket.get("docket_number_core")
+        if value is not None:
+            return str(value)
+    return _get_nested(cluster, "docket_number")
+
+
+# Extraction
 
 
 def extract_metadata(record: dict) -> dict:
@@ -38,7 +93,7 @@ def extract_metadata(record: dict) -> dict:
     opinions = record.get("opinions", [])
 
     # Citations — CourtListener returns these as a list of objects or strings
-    raw_citations = cluster.get("citations", [])
+    raw_citations = _as_list(cluster.get("citations", []))
     citations = []
     for c in raw_citations:
         if isinstance(c, dict):
@@ -49,7 +104,7 @@ def extract_metadata(record: dict) -> dict:
     # Judges — may be a string or list
     judges_raw = cluster.get("judges", "") or ""
     if isinstance(judges_raw, list):
-        judges = judges_raw
+        judges = [str(j).strip() for j in judges_raw if str(j).strip()]
     else:
         judges = [j.strip() for j in judges_raw.split(",") if j.strip()]
 
@@ -76,12 +131,8 @@ def extract_metadata(record: dict) -> dict:
         "case_name_short": cluster.get("case_name_short", ""),
         "case_name_full": cluster.get("case_name_full", ""),
         "date_filed": cluster.get("date_filed", ""),
-        "court_id": cluster.get("docket", {}).get("court_id", "")
-            if isinstance(cluster.get("docket"), dict)
-            else "",
-        "docket_number": cluster.get("docket", {}).get("docket_number", "")
-            if isinstance(cluster.get("docket"), dict)
-            else "",
+        "court_id": _extract_court_id(cluster, opinions),
+        "docket_number": _extract_docket_number(cluster),
         "citations": citations,
         "judges": judges,
         "opinion_types": opinion_types,
@@ -111,18 +162,18 @@ def process_all(
 
     for path in raw_files:
         log.info("Processing %s …", path.name)
-        record = json.loads(path.read_text())
+        record = json.loads(path.read_text(encoding="utf-8"))
         meta = extract_metadata(record)
 
         # Save individual metadata file
         dest = output_dir / f"{path.stem}_meta.json"
-        dest.write_text(json.dumps(meta, indent=2, default=str))
+        dest.write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
 
         catalog.append(meta)
 
     # Write combined catalog (one JSON object per line)
     catalog_path = output_dir / "catalog.jsonl"
-    with open(catalog_path, "w") as f:
+    with open(catalog_path, "w", encoding="utf-8") as f:
         for entry in catalog:
             f.write(json.dumps(entry, default=str) + "\n")
 
