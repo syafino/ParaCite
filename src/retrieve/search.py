@@ -101,6 +101,11 @@ def main() -> None:
     args = parser.parse_args()
 
     # --- Validate index exists -------------------------------------------
+    index_dir = args.index_dir
+    if index_dir == VECTORS_DIR and (index_dir / args.embedder).exists():
+        index_dir = index_dir / args.embedder
+    args.index_dir = index_dir
+
     records_path = args.index_dir / "records.jsonl"
     faiss_path = args.index_dir / "index.faiss"
     npy_path = args.index_dir / "embeddings.npy"
