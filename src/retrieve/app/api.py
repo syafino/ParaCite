@@ -36,6 +36,10 @@ def run_citation_pipeline(text: str, style: str, top_k: int = 3) -> dict:
         }
 
     try:
+        backend_response = _try_backend_ask(cleaned_text, normalized_style, safe_top_k)
+        if backend_response is not None:
+            return backend_response
+
         claims, parser_message = _get_claims(cleaned_text)
         if not claims:
             return {
@@ -64,6 +68,96 @@ def run_citation_pipeline(text: str, style: str, top_k: int = 3) -> dict:
             "message": f"Could not run the citation pipeline: {exc}",
             "claims": [],
         }
+
+
+def _try_backend_ask(text: str, style: str, top_k: int) -> dict | None:
+    """Use the merged backend ask service when it is available.
+
+    The backend returns ``claims`` with ``sources``. The Streamlit UI expects
+    ``claims`` with formatted ``citations``, so this adapts the shape while the
+    citation formatter is still listed as a backend missing feature.
+    """
+    try:
+        from src.app import get_ask_service
+    except ImportError:
+        return None
+
+    try:
+        backend_result = get_ask_service().ask(text, top_k=top_k, style=style)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": (
+                "Backend ask service is present, but could not run. "
+                f"Details: {exc}"
+            ),
+            "claims": [],
+        }
+
+    claims = _normalize_backend_claims(backend_result, style)
+    missing = backend_result.get("missing") or []
+    if claims:
+        message = "Connected to backend ask service."
+    else:
+        message = (
+            "Backend ask service ran, but returned no citable claims. "
+            "If this is unexpected, check whether the local LLM endpoint is running."
+        )
+    if missing:
+        message += f" Missing backend features: {', '.join(missing)}."
+
+    return {
+        "status": "ok",
+        "message": message,
+        "claims": claims,
+    }
+
+
+def _normalize_backend_claims(backend_result: dict, style: str) -> list[dict]:
+    claims: list[dict] = []
+    missing = backend_result.get("missing") or []
+    warnings = [f"backend missing: {name}" for name in missing]
+
+    for idx, claim in enumerate(backend_result.get("claims") or []):
+        normalized_claim = _normalize_claim(claim, idx, claim.get("text", ""))
+        citations = []
+        for source in claim.get("sources") or []:
+            flat_source = _flatten_backend_source(source, normalized_claim["claim_id"])
+            citation = _citation_from_source(flat_source, style)
+            citations.append(
+                {
+                    "doc_id": flat_source.get("doc_id", ""),
+                    "style": style,
+                    "citation": citation,
+                    "warnings": warnings,
+                    "score": flat_source.get("score"),
+                    "matched_chunk": flat_source.get("matched_chunk", ""),
+                    "cluster_url": flat_source.get("cluster_url", ""),
+                }
+            )
+        claims.append({**normalized_claim, "citations": citations})
+    return claims
+
+
+def _flatten_backend_source(source: dict, claim_id: str) -> dict:
+    metadata = source.get("metadata") or {}
+    return {
+        "claim_id": claim_id,
+        "score": source.get("score"),
+        "chunk_id": source.get("chunk_id", ""),
+        "doc_id": source.get("doc_id", ""),
+        "source": metadata.get("source", ""),
+        "case_name": metadata.get("case_name", ""),
+        "case_name_short": metadata.get("case_name_short", ""),
+        "case_name_full": metadata.get("case_name_full", ""),
+        "date_filed": metadata.get("date_filed", ""),
+        "court_id": metadata.get("court_id", ""),
+        "docket_number": metadata.get("docket_number", ""),
+        "citations": metadata.get("citations", []),
+        "judges": metadata.get("judges", []),
+        "cluster_url": metadata.get("cluster_url", ""),
+        "matched_chunk": source.get("matched_chunk", ""),
+    }
 
 
 def _normalize_style(style: str) -> str:
