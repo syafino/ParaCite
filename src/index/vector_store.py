@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,6 +28,10 @@ log = logging.getLogger(__name__)
 
 VECTORS_DIR = INDEX_DIR / "vectors"
 DEFAULT_CHUNKS_PATH = TEXT_DIR / "chunks.jsonl"
+
+# Guards mutating writes (add + persistence) so concurrent ingest jobs don't
+# corrupt the FAISS index or records.jsonl.
+_WRITE_LOCK = threading.Lock()
 
 
 def _load_chunks(chunks_path: Path) -> list[dict]:
@@ -100,13 +105,32 @@ class VectorStore:
     :meth:`load` to restore one from disk.
     """
 
-    def __init__(self, index: faiss.Index, records: list[dict]) -> None:
+    def __init__(
+        self,
+        index: faiss.Index,
+        records: list[dict],
+        output_dir: Path | None = None,
+    ) -> None:
         self.index = index
         self.records = records
+        # When set, mutating operations (add) will persist back to this dir.
+        self.output_dir = output_dir
 
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
+
+    @classmethod
+    def empty(cls, dim: int, output_dir: Path = VECTORS_DIR) -> VectorStore:
+        """Create an empty FAISS index ready to receive incremental adds.
+
+        Used at app startup when no prior index exists on disk.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        idx = faiss.IndexFlatIP(dim)
+        store = cls(idx, [], output_dir=output_dir)
+        store._persist(embedder_name="(empty)")
+        return store
 
     @classmethod
     def build(
@@ -127,7 +151,7 @@ class VectorStore:
             faiss.write_index(idx, str(output_dir / "index.faiss"))
             cls._write_manifest(output_dir, chunks_path, embedder, 0, 0)
             log.info("No chunks found — wrote empty index to %s", output_dir)
-            return cls(idx, [])
+            return cls(idx, [], output_dir=output_dir)
 
         texts = [r["text"] for r in records]
         embeddings = _l2_normalize(embedder.embed(texts))
@@ -146,7 +170,7 @@ class VectorStore:
             "Built FAISS index for %d chunks (%d-d) → %s",
             len(records), embeddings.shape[1], output_dir,
         )
-        return cls(idx, records)
+        return cls(idx, records, output_dir=output_dir)
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -206,7 +230,77 @@ class VectorStore:
                 f"Neither index.faiss nor embeddings.npy found in {index_dir}"
             )
 
-        return cls(idx, records)
+        return cls(idx, records, output_dir=index_dir)
+
+    # ------------------------------------------------------------------
+    # Incremental updates
+    # ------------------------------------------------------------------
+
+    def add(
+        self,
+        records: list[dict],
+        embeddings: np.ndarray,
+        embedder_name: str = "incremental",
+    ) -> int:
+        """Append ``records`` (and their already-computed ``embeddings``) to
+        the index and persist to disk. Returns the number of records added.
+
+        ``embeddings`` will be L2-normalised here, so callers may pass raw
+        vectors. If the FAISS index dimension is 0 (the empty-built default
+        used when there were no initial chunks), this method will reinitialize
+        the index to match the embedding dimension.
+        """
+        if len(records) == 0:
+            return 0
+        if len(records) != embeddings.shape[0]:
+            raise ValueError(
+                f"records ({len(records)}) and embeddings ({embeddings.shape[0]}) "
+                "length mismatch"
+            )
+
+        normalized = _l2_normalize(embeddings.astype(np.float32, copy=False))
+        new_dim = int(normalized.shape[1])
+
+        with _WRITE_LOCK:
+            existing_dim = self.index.d if hasattr(self.index, "d") else 0
+            if existing_dim == 0 and len(self.records) == 0:
+                # First add into an empty store: rebuild index at the right dim.
+                self.index = faiss.IndexFlatIP(new_dim)
+            elif existing_dim != new_dim:
+                raise ValueError(
+                    f"embedding dim mismatch: index={existing_dim} new={new_dim}"
+                )
+
+            self.index.add(normalized)
+            self.records.extend(records)
+
+            if self.output_dir is not None:
+                self._persist(embedder_name=embedder_name)
+
+        return len(records)
+
+    def _persist(self, embedder_name: str = "unknown") -> None:
+        """Write ``index.faiss``, ``records.jsonl``, ``manifest.json`` to
+        ``self.output_dir``. Caller is expected to hold ``_WRITE_LOCK``."""
+        if self.output_dir is None:
+            return
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(self.index, str(self.output_dir / "index.faiss"))
+        _write_jsonl(self.output_dir / "records.jsonl", self.records)
+        manifest = {
+            "schema_version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "embedder": embedder_name,
+            "embedding_dim": int(self.index.d) if hasattr(self.index, "d") else 0,
+            "num_chunks": len(self.records),
+            "artifacts": {
+                "faiss_index": "index.faiss",
+                "records": "records.jsonl",
+            },
+        }
+        (self.output_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8",
+        )
 
     # ------------------------------------------------------------------
     # Search
@@ -217,6 +311,8 @@ class VectorStore:
 
         *query_vec* should be a 1-D float32 array (already L2-normalised).
         """
+        if not self.records or self.index.ntotal == 0:
+            return []
         query = np.asarray(query_vec, dtype=np.float32).reshape(1, -1)
         scores, indices = self.index.search(query, min(top_k, len(self.records)))
         results: list[dict] = []
@@ -284,7 +380,10 @@ def main() -> None:
         sys.exit(1)
 
     embedder = _resolve_embedder(args.embedder, args.pretrained, args.model)
-    VectorStore.build(embedder, chunks_path=args.chunks, output_dir=args.output_dir)
+    output_dir = args.output_dir
+    if output_dir == VECTORS_DIR:
+        output_dir = output_dir / args.embedder
+    VectorStore.build(embedder, chunks_path=args.chunks, output_dir=output_dir)
 
 
 if __name__ == "__main__":
