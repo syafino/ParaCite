@@ -12,13 +12,13 @@ import logging
 from typing import Any
 
 from src.parse import extract_claims
+from src.retrieve.cite import format_citation
 from src.retrieve.search import SemanticSearch
 
 log = logging.getLogger(__name__)
 
 
 _MISSING_FEATURES = [
-    "citation_formatter",
     "bm25_hybrid",
     "courtlistener_metadata_join",
 ]
@@ -34,7 +34,7 @@ class AskService:
         self,
         text: str,
         top_k: int = 3,
-        style: str = "apa",  # accepted but unused until formatter lands
+        style: str = "apa",
     ) -> dict[str, Any]:
         if not text or not text.strip():
             return {"claims": [], "missing": list(_MISSING_FEATURES), "style": style}
@@ -43,10 +43,23 @@ class AskService:
         out: list[dict[str, Any]] = []
         for claim in claims:
             hits = self.search.query(claim["text"], top_k=top_k)
+            sources = []
+            for hit in hits:
+                source = _shape_source(hit, claim.get("claim_id"))
+                try:
+                    formatted = format_citation(source, style)
+                    source["citation"] = formatted["citation"]
+                    source["warnings"] = formatted["warnings"]
+                except Exception as e:
+                    log.warning("Citation formatting failed: %s", e)
+                    source["citation"] = ""
+                    source["warnings"] = [str(e)]
+                sources.append(source)
+
             out.append(
                 {
                     **claim,
-                    "sources": [_shape_source(h) for h in hits],
+                    "sources": sources,
                 }
             )
 
@@ -57,18 +70,24 @@ class AskService:
         }
 
 
-def _shape_source(hit: dict[str, Any]) -> dict[str, Any]:
+def _shape_source(hit: dict[str, Any], claim_id: str | None = None) -> dict[str, Any]:
     """Trim retrieval hit to a friendly response shape.
 
-    The retriever returns ``{score, chunk_id, doc_id, text, metadata}``; we
-    rename ``text`` -> ``matched_chunk`` (capped) so the response matches the
-    plan's documented contract and stays compact over the wire.
+    The retriever returns ``{score, chunk_id, doc_id, text, metadata}``.
+    We flatten metadata into the top level to match the formatter contract.
     """
+    metadata = hit.get("metadata", {})
     text = hit.get("text", "") or ""
-    return {
+
+    # Start with metadata fields
+    out = dict(metadata)
+
+    # Override / add retrieval-specific fields
+    out.update({
+        "claim_id": claim_id or "",
         "score": hit.get("score"),
-        "chunk_id": hit.get("chunk_id"),
-        "doc_id": hit.get("doc_id"),
+        "doc_id": hit.get("doc_id") or metadata.get("id"),
         "matched_chunk": text[:500],
-        "metadata": hit.get("metadata", {}),
-    }
+    })
+
+    return out
