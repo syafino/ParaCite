@@ -17,14 +17,14 @@ from src.core import AskService, IngestService, JobRegistry
 from src.embeddings.base import Embedder
 from src.embeddings.sentence_transformer import SentenceTransformerEmbedder
 from src.index.vector_store import VECTORS_DIR, VectorStore
-from src.retrieve.search import SemanticSearch
+from src.retrieve.hybrid import HybridSearch
 
 log = logging.getLogger(__name__)
 
 _INIT_LOCK = threading.RLock()
 _EMBEDDER: Embedder | None = None
 _STORE: VectorStore | None = None
-_SEARCH: SemanticSearch | None = None
+_HYBRID_SEARCH: HybridSearch | None = None
 _INGEST: IngestService | None = None
 _ASK: AskService | None = None
 _JOBS: JobRegistry | None = None
@@ -71,13 +71,21 @@ def get_ingest_service() -> IngestService:
 
 
 def get_ask_service() -> AskService:
-    global _ASK, _SEARCH
+    global _ASK
     if _ASK is None:
         with _INIT_LOCK:
             if _ASK is None:
-                _SEARCH = SemanticSearch(get_embedder(), get_store())
-                _ASK = AskService(_SEARCH)
+                _ASK = AskService(get_hybrid_search())
     return _ASK
+
+
+def get_hybrid_search() -> HybridSearch:
+    global _HYBRID_SEARCH
+    if _HYBRID_SEARCH is None:
+        with _INIT_LOCK:
+            if _HYBRID_SEARCH is None:
+                _HYBRID_SEARCH = HybridSearch.from_sentence_store(get_embedder(), get_store())
+    return _HYBRID_SEARCH
 
 
 def get_jobs() -> JobRegistry:
@@ -92,6 +100,7 @@ def get_jobs() -> JobRegistry:
 __all__ = [
     "get_ask_service",
     "get_embedder",
+    "get_hybrid_search",
     "get_ingest_service",
     "get_jobs",
     "get_store",

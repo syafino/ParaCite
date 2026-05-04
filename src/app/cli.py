@@ -93,7 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--reload", action="store_true")
     p_serve.set_defaults(func=_cmd_serve)
 
-    p_ingest = sub.add_parser("ingest", help="ingest a .txt/.md/.pdf file (sync)")
+    p_ingest = sub.add_parser("ingest", help="ingest a .txt/.md/.pdf/.json file (sync)")
     p_ingest.add_argument("path", type=str, help="path to file")
     p_ingest.set_defaults(func=_cmd_ingest)
 

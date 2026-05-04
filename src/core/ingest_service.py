@@ -15,6 +15,7 @@ from src.embeddings.base import Embedder
 from src.index.vector_store import VectorStore
 from src.ingest.chunk_text import chunk_text
 from src.ingest.extract_text import extract_text
+from src.ingest.json_documents import load_json_documents
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class IngestService:
                 on_progress(stage, info)
 
         emit("hashing")
+        if path.suffix.lower() == ".json":
+            return self._ingest_json(path, emit)
+
         doc_id = _sha256_of_file(path)[:16]
 
         emit("extracting", doc_id=doc_id)
@@ -72,6 +76,58 @@ class IngestService:
         emit("done", doc_id=doc_id, num_chunks=len(chunks))
         log.info("Ingested %s as doc_id=%s (%d chunks)", path.name, doc_id, len(chunks))
         return {"doc_id": doc_id, "num_chunks": len(chunks), "filename": path.name}
+
+    def _ingest_json(
+        self,
+        path: Path,
+        emit: Callable[..., None],
+    ) -> dict[str, Any]:
+        emit("extracting")
+        documents = load_json_documents(path)
+        if not documents:
+            raise ValueError(f"no JSON documents with text found in {path.name}")
+
+        all_chunks: list[dict[str, Any]] = []
+        doc_ids: list[str] = []
+        emit("chunking", num_documents=len(documents))
+        for document in documents:
+            doc_id = str(document["doc_id"])
+            doc_ids.append(doc_id)
+            chunks = chunk_text(
+                doc_id,
+                str(document["text"]),
+                source_filename=path.name,
+                extra_metadata=document.get("metadata") or {},
+            )
+            all_chunks.extend(chunks)
+
+        if not all_chunks:
+            raise ValueError(f"no chunks produced from {path.name}")
+
+        emit("embedding", num_documents=len(documents), num_chunks=len(all_chunks))
+        embeddings = self.embedder.embed([chunk["text"] for chunk in all_chunks])
+
+        emit("indexing", num_documents=len(documents), num_chunks=len(all_chunks))
+        self.store.add(
+            all_chunks,
+            embeddings,
+            embedder_name=type(self.embedder).__name__,
+        )
+
+        emit("done", num_documents=len(documents), num_chunks=len(all_chunks))
+        log.info(
+            "Ingested %s as %d JSON documents (%d chunks)",
+            path.name,
+            len(documents),
+            len(all_chunks),
+        )
+        return {
+            "doc_id": ",".join(doc_ids[:5]) + ("..." if len(doc_ids) > 5 else ""),
+            "doc_ids": doc_ids,
+            "num_documents": len(documents),
+            "num_chunks": len(all_chunks),
+            "filename": path.name,
+        }
 
 
 def _sha256_of_file(path: Path, buf_size: int = 1 << 20) -> str:

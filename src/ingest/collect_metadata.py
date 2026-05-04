@@ -138,6 +138,7 @@ def extract_metadata(record: dict) -> dict:
         "opinion_types": opinion_types,
         "num_opinions": len(opinions),
         "word_count": len(full_text.split()),
+        "text": full_text,
         "preview": full_text[:500],
         "cluster_url": f"https://www.courtlistener.com/opinion/{cluster_id}/",
     }

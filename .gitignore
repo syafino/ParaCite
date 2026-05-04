@@ -4,5 +4,8 @@ __pycache__/
 .venv/
 .vscode/
 data/raw/opinions/
+
+# Generated ingestion and index outputs
 data/processed/
 data/indexes/
+data/processed/text/chunks.jsonl

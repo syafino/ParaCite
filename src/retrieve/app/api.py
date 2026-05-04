@@ -1,10 +1,4 @@
-"""Adapter boundary between the Streamlit frontend and backend pipeline.
-
-The parser/retriever/formatter modules are still being built by separate
-workstreams, so this module is intentionally defensive: it tries real hooks
-when they exist and otherwise returns deterministic demo results that keep the
-frontend usable.
-"""
+"""Adapter boundary between the Streamlit frontend and backend pipeline."""
 
 from __future__ import annotations
 
@@ -15,6 +9,7 @@ from typing import Any, Callable
 
 SUPPORTED_STYLES = {"bluebook", "apa", "mla", "ieee", "bibtex"}
 DEFAULT_STYLE = "bluebook"
+HIDDEN_MISSING_BACKEND_FEATURES = {"bm25_hybrid"}
 
 
 def run_citation_pipeline(text: str, style: str, top_k: int = 3) -> dict:
@@ -22,7 +17,7 @@ def run_citation_pipeline(text: str, style: str, top_k: int = 3) -> dict:
 
     Returns the stable frontend contract described in ``implementation.md``.
     When backend pieces are unavailable, the response status is ``"demo"`` and
-    deterministic citation placeholders are returned.
+    placeholder citation results are returned.
     """
     cleaned_text = text.strip()
     normalized_style = _normalize_style(style)
@@ -74,8 +69,7 @@ def _try_backend_ask(text: str, style: str, top_k: int) -> dict | None:
     """Use the merged backend ask service when it is available.
 
     The backend returns ``claims`` with ``sources``. The Streamlit UI expects
-    ``claims`` with formatted ``citations``, so this adapts the shape while the
-    citation formatter is still listed as a backend missing feature.
+    ``claims`` with formatted ``citations``.
     """
     try:
         from src.app import get_ask_service
@@ -95,7 +89,7 @@ def _try_backend_ask(text: str, style: str, top_k: int) -> dict | None:
         }
 
     claims = _normalize_backend_claims(backend_result, style)
-    missing = backend_result.get("missing") or []
+    missing = _visible_missing_features(backend_result)
     if claims:
         message = "Connected to backend ask service."
     else:
@@ -115,22 +109,30 @@ def _try_backend_ask(text: str, style: str, top_k: int) -> dict | None:
 
 def _normalize_backend_claims(backend_result: dict, style: str) -> list[dict]:
     claims: list[dict] = []
-    missing = backend_result.get("missing") or []
+    missing = _visible_missing_features(backend_result)
     warnings = [f"backend missing: {name}" for name in missing]
 
     for idx, claim in enumerate(backend_result.get("claims") or []):
         normalized_claim = _normalize_claim(claim, idx, claim.get("text", ""))
         citations = []
-        for source in claim.get("sources") or []:
+        for source in claim.get("citations") or claim.get("sources") or []:
             flat_source = _flatten_backend_source(source, normalized_claim["claim_id"])
-            citation = _citation_from_source(flat_source, style)
+
+            real_citation = source.get("citation")
+            real_warnings = source.get("warnings") or []
+
+            citation = real_citation if real_citation else _citation_from_source(flat_source, style)
+            combined_warnings = warnings + real_warnings
+
             citations.append(
                 {
                     "doc_id": flat_source.get("doc_id", ""),
                     "style": style,
                     "citation": citation,
-                    "warnings": warnings,
+                    "warnings": combined_warnings,
                     "score": flat_source.get("score"),
+                    "scores": flat_source.get("scores") or {},
+                    "retrieval_modes": flat_source.get("retrieval_modes") or [],
                     "matched_chunk": flat_source.get("matched_chunk", ""),
                     "cluster_url": flat_source.get("cluster_url", ""),
                 }
@@ -139,11 +141,22 @@ def _normalize_backend_claims(backend_result: dict, style: str) -> list[dict]:
     return claims
 
 
+def _visible_missing_features(backend_result: dict) -> list[str]:
+    missing = backend_result.get("missing") or []
+    return [
+        name
+        for name in missing
+        if str(name).strip().lower() not in HIDDEN_MISSING_BACKEND_FEATURES
+    ]
+
+
 def _flatten_backend_source(source: dict, claim_id: str) -> dict:
     metadata = source.get("metadata") or {}
     return {
         "claim_id": claim_id,
         "score": source.get("score"),
+        "scores": source.get("scores") or {},
+        "retrieval_modes": source.get("retrieval_modes") or [],
         "chunk_id": source.get("chunk_id", ""),
         "doc_id": source.get("doc_id", ""),
         "source": metadata.get("source", ""),
@@ -270,7 +283,7 @@ def _demo_response(claims: list[dict], style: str, top_k: int, parser_message: s
         "status": "demo",
         "message": (
             f"{parser_message} Retriever/formatter modules are not fully available yet, "
-            "so these are deterministic demo citations."
+            "so these are placeholder citations."
         ),
         "claims": demo_claims,
     }

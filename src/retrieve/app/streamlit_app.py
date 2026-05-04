@@ -37,8 +37,7 @@ def main() -> None:
         style = st.selectbox("Citation style", STYLE_OPTIONS, index=0)
         top_k = st.slider("Candidates per claim", min_value=1, max_value=5, value=3)
         st.info(
-            "The frontend is wired to a stable adapter. If parser/retriever/"
-            "formatter modules are missing, ParaCite shows deterministic demo results."
+            "If the backend cannot return citations yet, ParaCite shows placeholder results."
         )
 
     text = st.text_area(
@@ -71,7 +70,7 @@ def _render_status(result: dict) -> None:
     if status == "ok":
         st.success(message or "Citations generated.")
     elif status == "demo":
-        st.warning(message or "Demo citations shown because backend modules are unavailable.")
+        st.warning(message or "Placeholder citations shown because backend modules are unavailable.")
     else:
         st.error(message or "Unable to generate citations.")
 
@@ -109,7 +108,15 @@ def _render_citation(rank: int, citation: dict) -> None:
     details = [f"doc_id: `{doc_id}`", f"style: `{citation.get('style', '')}`"]
     if score is not None:
         details.append(f"score: `{score}`")
+    modes = citation.get("retrieval_modes") or []
+    if modes:
+        details.append(f"retrieval: `{', '.join(modes)}`")
     st.markdown(" | ".join(details))
+
+    scores = citation.get("scores") or {}
+    if scores:
+        with st.expander("Hybrid score details"):
+            st.json(scores)
 
     url = citation.get("cluster_url")
     if url:

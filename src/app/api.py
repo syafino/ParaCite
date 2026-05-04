@@ -120,3 +120,9 @@ def _run_ingest_job(job_id: str, path: Path) -> None:
     except Exception as exc:  # noqa: BLE001 - top-level worker boundary
         log.exception("ingest job %s failed", job_id)
         jobs.update(job_id, status=JobStatus.FAILED, error=str(exc), stage="failed")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.app.api:app", host="127.0.0.1", port=8000, reload=True)
+

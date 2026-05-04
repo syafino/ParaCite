@@ -1,33 +1,26 @@
-"""Synchronous ask pipeline: text -> claims -> retrieved sources per claim.
-
-Honest "wire only what exists" mode (per implementation plan): we run the
-sentence parser to find citable claims and do a vector-only retrieval for
-each. The downstream citation formatter and BM25 hybrid don't exist yet, so
-we surface that explicitly via the ``missing`` field in the response.
-"""
+"""Synchronous ask pipeline: text -> claims -> hybrid retrieved sources."""
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
+from src.config import METADATA_DIR
 from src.parse import extract_claims
 from src.retrieve.cite import format_citation
-from src.retrieve.search import SemanticSearch
+from src.retrieve.hybrid import HybridSearch
 
 log = logging.getLogger(__name__)
 
 
-_MISSING_FEATURES = [
-    "bm25_hybrid",
-    "courtlistener_metadata_join",
-]
+_MISSING_FEATURES = []
 
 
 class AskService:
-    """Compose claim extraction + vector retrieval into a single response."""
+    """Compose claim extraction + hybrid retrieval into a single response."""
 
-    def __init__(self, search: SemanticSearch) -> None:
+    def __init__(self, search: HybridSearch) -> None:
         self.search = search
 
     def ask(
@@ -46,6 +39,20 @@ class AskService:
             sources = []
             for hit in hits:
                 source = _shape_source(hit, claim.get("claim_id"))
+
+                doc_id = source.get("doc_id")
+                if doc_id:
+                    meta_path = METADATA_DIR / f"cluster_{doc_id}_meta.json"
+                    if meta_path.exists():
+                        try:
+                            with meta_path.open("r", encoding="utf-8") as f:
+                                meta_data = json.load(f)
+                                for k, v in meta_data.items():
+                                    if k not in source:
+                                        source[k] = v
+                        except Exception as e:
+                            log.warning("Failed to load metadata for doc_id %s: %s", doc_id, e)
+                
                 try:
                     formatted = format_citation(source, style)
                     source["citation"] = formatted["citation"]
@@ -59,7 +66,7 @@ class AskService:
             out.append(
                 {
                     **claim,
-                    "sources": sources,
+                    "citations": sources,
                 }
             )
 
@@ -76,18 +83,33 @@ def _shape_source(hit: dict[str, Any], claim_id: str | None = None) -> dict[str,
     The retriever returns ``{score, chunk_id, doc_id, text, metadata}``.
     We flatten metadata into the top level to match the formatter contract.
     """
-    metadata = hit.get("metadata", {})
+    metadata = _flatten_metadata(hit.get("metadata", {}))
     text = hit.get("text", "") or ""
 
-    # Start with metadata fields
     out = dict(metadata)
 
-    # Override / add retrieval-specific fields
     out.update({
         "claim_id": claim_id or "",
         "score": hit.get("score"),
+        "scores": hit.get("scores") or {},
+        "retrieval_modes": hit.get("retrieval_modes") or [],
+        "chunk_id": hit.get("chunk_id") or "",
         "doc_id": hit.get("doc_id") or metadata.get("id"),
         "matched_chunk": text[:500],
     })
 
     return out
+
+
+def _flatten_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Handle both flat metadata and records shaped as {"metadata": {...}}."""
+    if not isinstance(metadata, dict):
+        return {}
+    nested = metadata.get("metadata")
+    if isinstance(nested, dict):
+        merged = dict(nested)
+        for key, value in metadata.items():
+            if key != "metadata" and key not in merged:
+                merged[key] = value
+        return merged
+    return dict(metadata)

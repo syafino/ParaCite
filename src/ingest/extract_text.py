@@ -3,6 +3,7 @@
 Dispatches on file suffix:
 - ``.txt`` / ``.md`` -> ``Path.read_text``
 - ``.pdf``           -> ``pypdf.PdfReader`` page loop
+- ``.json``          -> handled by ``IngestService`` as structured documents
 - anything else      -> ``UnsupportedFileType``
 """
 
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
+SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf", ".json"}
 
 
 class UnsupportedFileType(ValueError):
@@ -32,6 +33,10 @@ def extract_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
     if suffix == ".pdf":
         return _extract_pdf(path)
+    if suffix == ".json":
+        raise UnsupportedFileType(
+            "structured JSON files must be ingested through IngestService"
+        )
     raise UnsupportedFileType(
         f"unsupported file type: {suffix!r}. "
         f"Supported: {sorted(SUPPORTED_SUFFIXES)}"
