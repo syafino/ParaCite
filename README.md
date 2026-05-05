@@ -36,6 +36,40 @@ LLM_MODEL=gpt-4o
 
 ## Run Ingestion First
 
+### Option 1: CourtListener legal opinions
+
+Fetch raw CourtListener JSON files:
+
+```bash
+python3 -m src.ingest.fetch_courtlistener --query "Fourth Amendment" --court scotus --max-pages 2
+```
+
+Normalize the raw JSON into a metadata catalog:
+
+```bash
+python3 -m src.ingest.collect_metadata
+```
+
+Chunk the catalog into retrieval-ready text chunks:
+
+```bash
+python3 -m src.ingest.chunk_catalog
+```
+
+Build the vector index:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python3 -m src.index.vector_store --chunks data/processed/text/chunks.jsonl --embedder sentence-transformer --output-dir data/indexes/vectors
+```
+
+Build the BM25 index:
+
+```bash
+python3 -m src.index.build_bm25 --chunks data/processed/text/chunks.jsonl
+```
+
+### Option 2: Local papers or uploads
+
 Ingest the labor market paper corpus:
 
 ```bash
