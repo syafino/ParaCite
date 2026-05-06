@@ -21,6 +21,10 @@ SAMPLE_TEXT = (
 )
 
 
+def _use_sample_text() -> None:
+    st.session_state["input_text"] = SAMPLE_TEXT
+
+
 def main() -> None:
     st.set_page_config(
         page_title="ParaCite",
@@ -51,9 +55,7 @@ def main() -> None:
     with left:
         run_clicked = st.button("Find citations", type="primary", use_container_width=True)
     with right:
-        if st.button("Use sample text"):
-            st.session_state["input_text"] = SAMPLE_TEXT
-            st.rerun()
+        st.button("Use sample text", on_click=_use_sample_text)
 
     if not run_clicked:
         st.write("Paste text, choose a style, then run ParaCite.")
